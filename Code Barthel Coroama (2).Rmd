@@ -1,0 +1,564 @@
+---
+title: "Prévisions du taux d'occupation des hotels à Los Angeles: saisonnalité et implications pandémiques"
+author: "Barthel Valentin et Coroama Georgiana-Ioana"
+date: "2024-03-08"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+# Liste des packages à installer et à charger
+packages <- c("readxl", "dplyr", "ggplot2", "lubridate", "fmsb", "quantmod", "AER", 
+              "xts", "astsa", "urca", "forecast", "tseries")
+
+# Boucle pour installer les packages s'ils ne sont pas déjà installés et chargement
+for (pkg in packages) {
+  if (!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+# Message de fin d'installation et de chargement
+cat("Tous les packages requis sont installés et chargés.\n")
+```
+
+
+
+
+## I. INTRODUCTION
+Au cœur de l’économie nationale, le secteur du tourisme contribue de manière significative à la production économique des Etats-Unis, avec un total estimé à 1500 milliards USD en 2016 selon l’OCDE. Au-delà de cela, il est bien connu que ce secteur fait partie des ceux qui créent le plus d’emplois au niveau national, avec environ 8 millions d’emplois enregistrés en 2016. De plus, les statistiques de l’OCDE révèlent également que les dépenses collectives des touristes internationaux à destination des Etats-Unis pour la même année ont atteint 245 milliards USD, le principal marché d’exportation en termes de contribution étant la Chine.
+Dans le contexte de la pandémie de Covid-19, qui a engendré des conséquences catastrophiques sur l’économie au niveau global, les restrictions sanitaires ont fortement déstabilisé l’industrie du tourisme (Škare et al. (2021)), ayant provoqué une chute considérable dans le taux d’occupation des établissements hôteliers à partir de 2020. 
+
+En nous appuyant sur cela, notre objectif va être d’estimer un modèle de prévision du taux d’occupation des hôtels pour la ville de Los Angeles, en tenant compte à la fois de la saisonnalité dans les cycles touristiques, ainsi que du changement de régime induit par la crise sanitaire. Plus précisément, nous allons utiliser des données journalières sur la période début janvier 2013- fin octobre 2020 issues d’une analyse comparative plus large sur l’effet de la pandémie dans huit grandes villes des Etats-Unis. 
+
+Nous chercherons à répondre à plusieurs questions telles que La pandémie induira-t-elle un changement permanent dans le taux d’occupation des hôtels sur un horizon temporel de deux ans ? Pourrait-on s’attendre à un retour à la configuration touristique prépandémique si la pandémie s’était prolongée encore 3, 6 ou bien 12 mois après octobre 2020 ? Nous allons ainsi pouvoir comparer nos prévisions pour la période novembre 2020- octobre 2022 avec les statistiques réelles enregistrées pendant cette période.
+En ce sens, la section suivante comportera un modèle ARIMAx (p, d, q) (P, D, Q) saisonnier, avec l’inclusion d’une variable binaire qui prend la valeur 1 si l’observation est issue de la période pandémique dont le début aux Etats-Unis est officiellement enregistré en janvier 2020 et 0 sinon. 
+
+Quant à la littérature existante à ce sujet, il convient de mentionner que les modèles de variation ont été largement employés durant la crise sanitaire pour des prévisions concernant de différents indicateurs pandémiques, tels que le nombre de nouveaux cas de Covid-19 ou le nombre de décès causés par le virus. Fanelli et Piazza (2020) ont développé un modèle ARIMA (p,d,q) pour étudier la tendance épidémiologique dans trois des pays européens les plus affectés (Espagne, Italie et France), en concluant que celui-ci permettait de réaliser des prévisions fiables pour la prévalence du virus sur un horizon de quelques jours. Chintalapudi et al. (2020) ont adopté un modèle SARIMA pour faire des prévisions du nombre de cas de Covid-19 en Italie en utilisant des données jusqu’en mars 2020. Les auteurs ont intégré dans leur analyse l’effet des deux mois de confinement en Italie, les prévisions leur ayant permis d’observer une diminution des cas confirmés pendant le confinement.
+
+Nous tenons à mentionner qu’à la différence de ces analyses, notre étude cherchera à prédire le taux d’occupation des hôtels et non l’évolution pandémique en soi, l’inclusion de la variable binaire Pandémie nous permettant de saisir le changement de régime touristique lors des prévisions et de comparer ces dernières en fonction de la durée anticipée de la pandémie en partant de notre échantillon sur la période 2013-2020.
+
+
+## II. CADRE STATISTIQUE
+### II.1. Données et statistiques descriptives
+```{r}
+library(readxl)
+library(dplyr)
+library(ggplot2)
+#COVID19_time_series<- read_xlsx("C:/Users/Georgiana/Downloads/COVID19_time_series.xlsx") #chargement de la base de données
+serie<- COVID19_time_series
+serie$Date <- as.Date(serie$Date)
+NY <- subset(serie, Location == "NewYork")
+Wash <- subset(serie, Location== "Washington")
+Da <- subset(serie, Location == "Dallas")
+LA <- subset(serie, Location == "LosAngeles")
+Or <- subset(serie, Location == "Orlando")
+Chi <- subset(serie, Location == "Chicago")
+Bos <- subset(serie, Location == "Boston")
+AT <- subset(serie, Location == "Atlanta")
+NY$City <- "New York"
+Wash$City <- "Washington"
+Da$City <- "Dallas"
+LA$City <- "Los Angeles"
+Or$City <- "Orlando"
+Chi$City <- "Chicago"
+Bos$City <- "Boston"
+AT$City <- "Atlanta"
+
+All_cities <- bind_rows(NY, Wash, Da, LA, Or, Chi, Bos, AT)
+ggplot(All_cities, aes(x = Date)) +
+  geom_line(aes(y = Revenue/100, color = "Revenue")) +
+  geom_line(aes(y = Demand, color = "Demand")) +
+  geom_line(aes(y = Occupancy*100, color = "Occupancy")) +
+  facet_wrap(~ City, scales = "free_y") + 
+  labs(title = "Evolution des 3 variables par rapport a l'annee, par ville",
+       x = "Annee",
+       y = "Valeur") +
+  scale_color_manual(values = c("Revenue" = "blue", "Demand" = "green",
+                                "Occupancy" = "red")) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+plot.title = element_text(size = 12, hjust = 0.5)) +
+  scale_x_date(date_breaks = "1 year", date_labels = "%Y")
+```
+En procédant à l’examen comparatif des 8 graphiques ci-dessus, ainsi que de l’évolution du taux d’occupation de hôtels pour le cas précis de la ville de Los Angeles, plusieurs aspects notables peuvent être mis en avant. 
+
+Dans un premier temps, il convient de mentionner que l’ensemble des 8 séries représentées comportent des similitudes en termes d’évolution du taux d’occupation des hôtels sur la période étudiée. Plus précisément, nous pouvons remarquer que ce dernier semble atteindre son pic début juillet toutes les années, en diminuant graduellement vers la fin du mois. Autrement dit, toutes les séries considérées comportent une composante saisonnière annuelle aisément identifiable jusqu’à 2019, ainsi qu’une marche aléatoire correspondant notamment à la période 2019-2020.
+
+Cela s’avère assez intuitif si on s’appuie sur les cycles touristiques des grandes villes aux Etats-Unis, qui sont fortement influencés par les périodes des vacances et de congés, ainsi que par la fête nationale, célébrée le 4 juillet.
+Par ailleurs, nous pouvons saisir que pour chaque ville, une rupture dans la saisonnalité intervient en 2020. En effet, le taux d’occupation des hôtels atteint sa valeur minimale (18%-20%) en juillet 2020, à la suite d’une chute considérable à partir de la fin de 2019. Sans surprise, cette diminution drastique peut s’expliquer par les effets néfastes de la première vague de la pandémie de Covid-19, marquée par un double choc d’offre et de demande. Par conséquent, le confinement, ainsi que la fermeture de nombreux établissements touristiques en raison des difficultés financières ont vraisemblablement mis les bases d’un climat touristique très précaire en 2020.
+
+
+
+```{r}
+library(lubridate)
+# Calculer les moyennes mensuelles
+data_NY_mensuelle <- NY %>%
+  group_by(Month = month(Date, label = TRUE, abbr = FALSE)) %>%
+  summarise(Occupancy_Moyen = (mean(Occupancy, na.rm = TRUE)/50)) %>%
+  ungroup()
+
+data_NY_mensuelle
+
+
+# Normaliser les données pour les rendre comparables
+#data_NY_mensuelle <- data_NY_mensuelle %>%
+#  mutate(across(c(Occupancy_Moyen), ~ . / max(.)))
+
+# Préparer les données pour le graphique radar
+# Assurer que les mois sont dans le bon ordre et transformer les données
+data_NY_mensuelle$Month <- factor(data_NY_mensuelle$Month, levels=month.name)
+radar_data_NY <- as.data.frame(t(data_NY_mensuelle[,-1]))
+names(radar_data_NY) <- month.name
+
+# Ajouter des rangées pour les valeurs min et max
+radar_data_NY <- rbind(rep(0, times = ncol(radar_data_NY)), 
+                       radar_data_NY, 
+                       rep(1, times = ncol(radar_data_NY)))
+
+# Les étiquettes des axes seront basées sur l'ordre des données
+labels <- c(month.name)
+library(fmsb)
+radarchart(radar_data_NY,
+           axistype = 1,
+           pcol = c("blue"),
+           pfcol = c("#0000FF80"), # Couleurs avec transparence
+           plty = 1, 
+           plwd = 4,
+           title = "Comparaisons saisonnières pour New York",
+           cglcol="grey", cglty=1, axislabcol="grey", 
+           vlcex=0.8)
+
+# Ajouter une légende avec des indicateurs de couleur solides pour une identification facile
+legend("topright", 
+       legend = c("Occupancy en base 50"), 
+       col = c("blue"), 
+       pch = 20, 
+       pt.cex = 2, 
+       cex = 0.8, 
+       bty = "n", 
+       fill = c("#0000FF80"))
+```
+```{r}
+
+data_LA_mensuelle <- LA %>%
+  group_by(Month = month(Date, label = T, abbr = FALSE)) %>%
+  summarise(Occupancy_Moyen = mean(Occupancy, na.rm = T)/50) %>%
+  ungroup()
+
+data_LA_mensuelle
+
+# Normaliser les données pour les rendre comparables
+#data_LA_mensuelle <- data_LA_mensuelle %>%
+#  mutate(across(c(Occupancy_Moyen), ~ . / max(.)))
+
+# Préparer les données pour le graphique radar
+# Assurer que les mois sont dans le bon ordre et transformer les données
+data_LA_mensuelle$Month <- factor(data_LA_mensuelle$Month, levels=month.name)
+radar_data_LA <- as.data.frame(t(data_LA_mensuelle[,-1]))
+names(radar_data_LA) <- month.name
+
+# Ajouter des rangées pour les valeurs min et max
+radar_data_LA <- rbind(rep(0, times = ncol(radar_data_LA)), 
+                       radar_data_LA, 
+                       rep(1, times = ncol(radar_data_LA)))
+
+# Les étiquettes des axes seront basées sur l'ordre des données
+labels <- c(month.name)
+
+# Créer le graphique radar pour Los Angeles
+radarchart(radar_data_LA,
+           axistype = 1,
+           pcol = c("red"),
+           pfcol = c("#FF000080"), # Couleurs avec transparence
+           plty = 1, 
+           plwd = 4,
+           title = "Comparaisons saisonnières pour Los Angeles",
+           cglcol="grey", cglty=1, axislabcol="grey", 
+           vlcex=0.8)
+#,
+# Utiliser 'labels' pour spécifier les étiquettes des axes
+#axislabels = labels)
+
+# Ajouter une légende avec des indicateurs de couleur solides pour une identification facile
+legend("topright", 
+       legend = c("Occupancy en base 50"), 
+       col = c("red"), 
+       pch = 20, 
+       pt.cex = 2, 
+       cex = 0.8, 
+       bty = "n", 
+       fill = c("#FF000080"))
+```
+Ces graphiques radars nous permettent d’observer les différences saisonnières du taux d’occupation des chambres d’hôtels pour l’ensemble des mois de l’année pour les villes de New York et de Los Angeles.
+
+Il n’est pas surprenant de constater que les périodes pour lesquelles le taux d’occupation des hôtels à New York atteint ses plus hauts points est en période d’été et en période de fin d’année, particulièrement durant les mois de juillet et d’août, mais également avec Thanksgiving ou encore les fêtes de Noël et de la Saint Sylvestre. Le taux d’occupation semble être moins élevé durant les périodes hivernales et automnales du fait qu’il ne s’agisse pas de saison touristique.
+
+Contrairement à la ville de New York, la ville de Los Angeles ne semble pas atteindre son pic d’attractivité touristique en période de fin d’année (novembre et décembre) bien que la ville soit tout de même très fréquentée sur la période prolongée de février à novembre, s’expliquant par son climat doux et l’attraction d’évènements majeurs d’envergure internationale tels que le « Grammy Awards » en février, l’« Academy Awards » en mars ou encore le « Los Angeles Film Festival » durant l’été.
+
+Ces résultats prennent donc en compte les taux d’occupation moyens pour chaque mois et nous permettent d’observer les tendances saisonnières pendant la période étudiée. Cependant, ces moyennes tendancielles seront tirées vers le bas en raison de la crise Covid qui a fortement impacté le tourisme et la production d’événements. 
+
+
+```{r}
+library(quantmod)
+library(AER)
+library(xts)
+library(astsa)
+library(readxl)
+#COVID19_time_series<- read_xlsx("C:/Users/Georgiana/Downloads/COVID19_time_series.xlsx")
+View(COVID19_time_series)
+serie<- COVID19_time_series
+serie$Date <- as.POSIXct(serie$Date, format = "format_de_date_et_heure")
+head(serie)
+
+```
+
+```{r}
+NY <- subset(serie, Location == "NewYork")
+Wash <- subset(serie, Location== "Washington")
+Da <- subset(serie, Location == "Dallas")
+LA <- subset(serie, Location == "LosAngeles")
+Or <- subset(serie, Location == "Orlando")
+Chi <- subset(serie, Location == "Chicago")
+Bos <- subset(serie, Location == "Boston")
+AT <- subset(serie, Location == "Atlanta")
+```
+
+```{r}
+
+#On transforme les subsets crées en séries temporelles:
+
+NY_xts <- xts(NY$Occupancy, order.by = NY$Date)
+Wash_xts <- xts(Wash$Occupancy, order.by = Wash$Date)
+Da_xts <- xts(Da$Occupancy, order.by = Da$Date)
+LA_xts <- xts(LA$Occupancy, order.by = LA$Date)
+Or_xts <- xts(Or$Occupancy, order.by = Or$Date)   
+Chi_xts <- xts(Chi$Occupancy, order.by = Chi$Date)
+Bos_xts <- xts(Bos$Occupancy, order.by = Bos$Date)
+AT_xts <- xts(AT$Occupancy, order.by = AT$Date)
+```
+
+
+
+
+```{r, results='hide'}
+#On procéde à la représentation graphique de l'évolution temporelle du taux d'occupation des hotels 
+#dans chacun des 8 villes touristiques y incluses:
+plot(NY_xts, main = "Taux d'occupation des hotels a New York")
+plot(Wash_xts, main = " Taux d'occupation des hotels a Washington")
+plot(Da_xts, main = "Taux d'occupation des hotels a Dallas")
+plot(LA_xts, main = "Taux d'occupation des hotels a Los Angeles")
+plot(Or_xts, main = "Taux d'occupation des hotels a Orlando")
+plot(Chi_xts, main = "Taux d'occupation des hotels a Chicago")
+plot(Bos_xts, main = "Taux d'occupation des hotels a Boston")
+plot(AT_xts, main = "Taux d'occupation des hotels a Atlanta")
+
+```
+
+Dans la suite de notre étude, nous procéderons à l’estimation d’un modèle Arima saisonnier (p, d, q) (P, D, Q) à variable exogène nous permettant de réaliser des prévisions sur le taux d’occupation des hôtels à Los Angeles en tenant compte également de la présence de la pandémie.
+
+## III. MODELISATION, INFERENCE STATISTIQUE ET ANALYSE DES RESULTATS 
+### III.1. Modélisation SARIMA (p, d, q)(P,D,Q)
+
+Dans l'optique d'assurer la validité de notre modèle, une première étape indispensable consiste à identifier les ordres correspondant au processus auto-regréssif et au processus de la moyenne mobile de la composante non saisonnière, ainsi que de la composante saisonnière. Il est égalément essentiel de vérifier la stationnarité de la série, car modéliser une série non stationnaire conduit à des résultats non fiables. Pour ce faire, nous allons d'abord nous appuyer sur une analyse visuelle des fonctions d'ACP et de PACF, ainsi que de la série considérée, pour procédér dans la section suivante aux tests formels de stationnarité.
+
+```{r}
+#Mensualisation des données journalières pour la ville de Los Angeles, en prenant la valeur moyenne pour chaque mois:
+library(dplyr)
+LosAng<- LA %>% group_by(Year, Month) %>% summarise(TauxOccupation=(mean(Occupancy)))
+
+#On transforme les données en série temporelle
+LosAng <- LosAng %>%
+  mutate(Date = as.yearmon(paste(Year, Month, sep = "-"))) 
+TauxOccupation<- xts(LosAng$TauxOccupation, order.by = LosAng$Date)
+
+```
+
+Après avoir transformé nos données pour qu'elle comportent une fréquence mensuelle, l'analyse graphique de l'évolution du taux d'occupation des hotels à LA rend encore plus claire l'existence d'une saisonnalité à période annuelle dans les données avant le début de la pandémie.Par conséquent, il s'avère nécessaire de réaliser une première différenciation saisonnière dans le but d'enlever cette composante. En analysant la série après l'extraction de la composante saisonnière, nous pouvons observer qu'elle n'est pas devenue stationnaire dans son ensemble et que la marche aléatoire persiste notamment sur la période correspondant à la pandémie. Cela n'est pas surprenant, car la différenciation saisonnière ne permet pas d'enlever la tendance stochastique qui rend la série non stationnaire spécifique à la période fin 2019-octobre 2020.
+
+```{r}
+TauxOccupation <- as.zoo(TauxOccupation)
+plot.zoo(TauxOccupation)
+plot.zoo(diff(TauxOccupation, lag=12))
+
+```
+
+Ainsi, il serait judicieux de procéder à une double différenciation (saisonnière et ordinaire). Néanmoins, étant donné le cadre de notre modélisation, qui comporte une saisonnalité non uniforme sur l'ensemble de la période considérée (il n'y a pas de saisonnalité pour la période pandémique), la double différenciation présente le risque de rendre la série trop volatile, ce qui pourrait conduire à des prévisions non fiables par la suite. De ce fait, nous allons procéder dans la section suivante à la mise en place des tests de stationnarité permettant de vérifier l'existence d'une racine unitaire et de tester également si seule la différenciation ordinaire est suffisante pour rendre la série stationnaire ou si une double différenciation s'avère impérative. Pour cela, nous allons nous baser sur le test de DF augmenté, ainsi que sur les tests de Philipps-Perron et KPSS.
+
+
+```{r}
+plot.zoo(diff(TauxOccupation))
+
+```
+
+
+En nous appuyant pour l'instant uniquement sur le graphique de la série différencié avec un filtre (1-L), il apparait notamment que la série est devenue plutot stationnaire dans son ensemble.
+
+
+
+```{r}
+acf2(diff(TauxOccupation))
+
+```
+
+De plus, en regardant également la PACF après une différenciation ordinaire avec un filtre (1-L), elle indique bien l'existence d'une corrélation significative avec la variable retardée à la période t-12, ainsi qu'une corrélation significative avec le premier lag. Quant à l'ACF, elle revèle aussi l'existance d'une composante de moyenne mobile saisonnière, ainsi qu'une composante non-saisonnière.
+Cela semble etre en concordance avec la représentation observée au niveau graphique, qui indique que la variation du taux d'occupation des hotels à LA pour la période pre-pandémique à l'instant t dépend de la variation de ce meme taux au meme mois de l'année précédente. Cela nous conduit au choix d'un modèle ARIMA saisonnier avec une intégration ordinaire d'ordre 1. Nous allons nous servir aussi de la fonction auto.arima pour l'identification précise des ordres de la composante saisonnière et non saisonnière du processus AR et du processus MA respectivement. Avant de faire cela, nous allons vérifier si les résultats concernant l'ordre d'intégation retenu peuvent etre validés à travers les trois tests de stationnarité mentionnés précédemment.
+
+
+
+
+
+
+### III.2 Inférence statistique: tests de stationnarité (DF,Phillips-Perron, KPSS)
+
+
+### Test ADF 
+
+```{r}
+library(urca)
+adf<- ur.df(TauxOccupation, type="none", selectlags = "AIC") #la série n'est pas stationnaire
+summary(adf)
+
+```
+```{r}
+
+adf_test <- ur.df(diff(TauxOccupation), type = "none", selectlags = "AIC")
+summary(adf_test) 
+
+```
+
+Les résultats du test ADF ne permettent pas de rejeter l’hypothèse nulle de présence de la racine unitaire dans la série, car la valeur statistique -0.6894 est supérieure à la valeur critique à 1, 5 et 10%. Par conséquent, nous concluons à la non-stationnarité de la série retenue et procédons à sa différenciation ordinaire. Les résultats du test ADF appliqué à la série différenciée permettent de rejeter l’hypothèse de non-stationnarité aux seuils de 1%, 5% et 10%, car -8.84 est inférieur aux valeurs critiques à tous ces seuils et de conclure, par conséquent, à la stationnarité de la série différenciée une fois.
+
+### Phillips-Perron
+
+```{r}
+library(tseries)
+pp.test(TauxOccupation)
+pp.test(diff(TauxOccupation))
+```
+En regardant la p-value associée au test de Phillips-Perron sur la série non différenciée, il est à noter qu’elle indique une non-stationnarité de la série uniquement au seuil de 1%. Après différenciation, la p-value est inférieure aux seuils de 1, 5 et 10%, ce qui nous permet de rejeter l’hypothèse nulle de présence de racine unitaire dans le cas de la série différenciée avec un filtre (1-L).
+
+
+```{r}
+kpss_test <- kpss.test(TauxOccupation)
+
+print(kpss_test)
+
+serie_diff <- diff(TauxOccupation)
+
+kpss_test_diff <- kpss.test(serie_diff)
+
+print(kpss_test_diff)
+```
+Dernièrement, en s’appuyant sur le test KPSS, qui à la différence des deux précédents, teste l’hypothèse nulle de stationnarité, il apparaît notamment que nous pouvons rejeter l’hypothèse nulle d’absence de racine unitaire uniquement au seuil de 10%. Quant à la série différenciée, le test permet de ne pas rejeter l’hypothèse nulle de stationnarité aux seuils de 1%, 5% et 10%.
+
+Ainsi, les trois tests présentent des résultats sensiblement différents au niveau de seuils de rejet de l’hypothèse nulle de présence de la racine unitaire (ou de son absence pour le test KPSS), mais ils permettent tous de conclure que la série différenciée est bien stationnaire.
+En nous basant sur ce résultat, nous allons retenir comme ordre de différenciation ordinaire d=1, sans procéder à une double différenciation avec différenciation saisonnière. (D=0)
+Par ailleurs, une variété de méthodes qui s’offre à nous peut être mise en place pour l’identifier les ordres p,q et P,Q de la composante non saisonnière et de la composante saisonnière respectivement.
+
+Nous avons identifié une potentielle modélisation en nous basant sur l’analyse graphique des fonctions ACF et PACF de la série différenciée. Pour un aperçu plus précis, nous pouvons également employer un critère d’information tel que le critère d’Akaike ou bien le critère BIC. Comme indiqué précédemment, nous allons privilégier dans notre analyse l’utilisation de la fonction auto.arima qui propose le modèle optimal en intégrant les critères mentionnés (minimisation de la valeur du BIC /AIC et ordre de différenciation nécessaire à la stationnarisation)
+
+```{r}
+library(forecast)
+
+sarima<- auto.arima(TauxOccupation)
+summary(sarima)
+
+```
+Il est à noter que l’utilisation de la fonction auto.arima nous a permis de retrouver le modèle ARIMA(0,1,2)(1,0,0)[12], qui comporte un processus autorégressif saisonnier d’ordre 1, une différenciation ordinaire et une composante non saisonnière de moyenne mobile d’ordre 2.
+En regardant les coefficients estimés, nous pouvons remarquer que la variation du terme saisonnier annuel (t-12) induit un effet positif significatif statistiquement sur le taux d’occupation des hôtels à LA à l’instant t. Celui-ci ne peut pas être perçu comme un multiplicateur, mais il peut s’interpréter comme l’effet d’une impulsion saisonnière appliquée 12 mois avant sur le taux d’occupation des hôtels à l’instant t. Autrement dit, une impulsion saisonnière de 1 point de % en t-12 induirait une hausse de 0.62 point de % du taux d’occupation des hôtels à l’instant t, toutes choses égales par ailleurs. De plus, nous pouvons observer que la qualité d’ajustement de notre modèle est élevée (75%), ce qui implique que le terme saisonnier contribue à bien prédire le taux d’occupation des hôtels  en t.
+Dans l’optique de tenir compte également de l’effet de la pandémie, nous allons procéder par la suite à l’inclusion d’une variable binaire prenant la valeur 1 pour toutes les observations issues à partir de janvier 2020. Notre spécification ajustée prend donc la forme suivante :  
+∆〖TauxOccupation〗_t=φ∆〖TauxOccupation〗_(t-12)+ε_t+ε_(t-1)+ε_(t-2)+β〖Pandemie〗_t
+Le tableau ci-dessous présente les résultats des estimations obtenus :
+
+```{r}
+LosAng <- LosAng %>% 
+  mutate(Pandemie = ifelse(Year == 2020, 1, 0))
+
+library(astsa)
+sarima_model <- arima(TauxOccupation, order=c(0,1,2), seasonal=list(order=c(1,0,0), period=12), xreg = LosAng$Pandemie)
+summary(sarima_model)
+
+
+```
+L’analyse des estimations après avoir contrôlé de l’effet de la pandémie met en avant un aspect important. Si l’effet d’une impulsion saisonnière appliquée en t-12 ne change pas significativement, l’effet négatif de la pandémie lui est très fort. Plus précisément, la pandémie induit une diminution de 24 points de pourcentage du taux moyen d’occupation des hôtels à LA, ce qui traduit une forte perturbation de la saisonnalité manifestée en absence de la pandémie. Il est à mentionner aussi que tous les coefficients sont statistiquement significatifs.
+
+
+```{r}
+sarima_model <- arima(TauxOccupation, order=c(0,1,2), seasonal=list(order=c(1,0,0), period=12))
+summary(sarima_model)
+```
+
+```{r}
+residuals <- residuals(sarima_model)
+
+SSE <- sum(residuals^2)
+SST <- sum((TauxOccupation - mean(TauxOccupation))^2)
+
+R_squared <- 1 - (SSE / SST)
+R_squared
+```
+
+
+
+## IV. PREVISIONS
+
+Dans cette section de notre étude, nous allons procéder à l’utilisation de ce modèle pour la réalisation des prévisions sur de différents horizons temporels, tout en intégrant la présence de la pandémie avec plusieurs scénarios possibles. 
+Pour ce faire, nous avons créé un vecteur d’une longueur égale aux nombres de périodes futures pour lesquelles nous anticipons que l’effet de la pandémie persisterait à partir de la dernière observation (octobre 2020) et nous avons ajusté les prévisions correspondant à ces périodes en soustrayant de leur valeur moyenne l’effet négatif lié à la pandémie. Les graphiques suivants illustrent les prévisions selon les différents scénarios possibles.
+
+
+
+
+### Cas 1. Persistance de la pandémie sur un horizon de 12 mois, prévision sur 2 ans
+
+```{r}
+library(forecast)
+
+forecast_result <- forecast(sarima_model, h = 24)
+
+effet_pandemie <- rep(0, length(forecast_result$mean))
+effet_pandemie[1:12] <- -24.23
+
+forecast_result_with_pandemic <- forecast_result
+forecast_result_with_pandemic$mean <- forecast_result_with_pandemic$mean + effet_pandemie
+
+print(forecast_result_with_pandemic)
+autoplot(forecast_result_with_pandemic)
+```
+### Cas 2. Persistance de la pandémie sur un horizon de 6 mois, prévision sur 2 ans
+
+```{r}
+forecast_result <- forecast(sarima_model, h = 24)
+
+effet_pandemie <- rep(0, length(forecast_result$mean))
+effet_pandemie[1:6] <- -24.23
+
+
+forecast_result_with_pandemic <- forecast_result
+forecast_result_with_pandemic$mean <- forecast_result_with_pandemic$mean + effet_pandemie
+
+print(forecast_result_with_pandemic)
+autoplot(forecast_result_with_pandemic)
+```
+
+### Cas 2. Persistance de la pandémie sur un horizon de 3 mois, prévision sur 2 ans
+
+
+```{r}
+forecast_result <- forecast(sarima_model, h = 24)
+
+effet_pandemie <- rep(0, length(forecast_result$mean))
+effet_pandemie[1:3] <- -24.23
+
+
+forecast_result_with_pandemic <- forecast_result
+forecast_result_with_pandemic$mean <- forecast_result_with_pandemic$mean + effet_pandemie
+
+print(forecast_result_with_pandemic)
+autoplot(forecast_result_with_pandemic)
+
+```
+A la lumière de ces trois graphiques, plusieurs aspects notables peuvent être mis en avant. Premièrement, nous pouvons observer que le caractère plus ou moins optimiste des prévisions sur le taux mensuel d’occupation des hôtels à LA est fortement influencé par la durée anticipée du prolongement de la pandémie après octobre 2020. En procédant à l’analyse comparative des 3 graphiques, il apparaît notamment que le scénario le plus optimiste est sans surprise celui qui limite la durée anticipée du prolongement de la crise sanitaire à uniquement trois mois. Dans ce cas, les prévisions montrent une diminution du taux d’occupation des hôtels à LA vers 25%, avec une reprise importante en février 2021 (53.73%) suivie par une nouvelle baisse, suite à laquelle le niveau prévu jusqu’en octobre 2022 fluctue entre 30 et 40% sans retrouver ses niveaux pré pandémiques.
+Quant au deuxième scénario, envisageant une durée anticipée de la pandémie de 6 mois après octobre 2020, il est à noter que les prévisions comportent un caractère beaucoup plus pessimiste. En effet, dans ce cas l’industrie hôtelière serait la plus affectée en mars et avril 2021, avec des niveaux prévus en dessous de 0% et une reprise prévue à partir de mai 2021.
+
+Le scénario le plus néfaste est sans doute le premier, qui fait l’hypothèse que la durée de la pandémie serait prolongée pour encore 12 mois après octobre 2020. Dans ce cas, nous pouvons observer que les prévisions révèlent une dégradation importante du cycle touristique traditionnel, avec de très faibles niveaux prévus et une reprise beaucoup plus lente que dans les deux autres scénarios précédemment mis en avant.
+
+Deuxièmement, un aspect important à mettre en évidence est que pour tout scénario considéré, la pandémie semble opérer une reconfiguration complète de la demande adressée à l’industrie hôtelière sur un horizon de deux ans, les prévisions indiquant une persistance des taux d’occupation réduits même en octobre 2022.
+
+Il serait également intéressant de comparer ces 3 scénarios avec l’évolution prévue du taux mensuel d’occupation des hôtels à LA sous l’hypothèse que la pandémie de Covid-19 n’aurait jamais émergé. Pour ce faire, nous allons soustraire de notre échantillon initial toutes les observations correspondant à la période 2013-2019, et nous allons nous servir à nouveau de la fonction auto. arima pour choisir la spécification optimale, comme suit:
+
+## IV.2 Modèle SARIMA (0,1,1) (0,1,1) [12]
+
+```{r}
+LosAng<- LA %>% group_by(Year, Month) %>% summarise(Tauxoccupation=(mean(Occupancy)))
+LosAng<- LosAng%>% filter(Year!=2020)
+LosAng <- LosAng %>%
+  mutate(Date = as.yearmon(paste(Year, Month, sep = "-"))) 
+Tauxoccupation<- xts(LosAng$Tauxoccupation, order.by = LosAng$Date)
+
+serie<- auto.arima(Tauxoccupation)
+summary(serie)
+```
+Nous pouvons observer que dans le cas de la série comportant uniquement des observations prépandémiques, une double différenciation (saisonnière et ordinaire) a été nécessaire pour la rendre stationnaire. De plus, il apparaît notamment que pour ce sous-échantillon, le taux d’occupation mensuel des hôtels à LA suit uniquement un processus non-saisonnier de moyenne mobile d’ordre q=1 et un processus saisonnier de moyenne mobile d’ordre Q=1, et pas de processus autorégressif, comme c’est le cas pour la série allant jusqu’en octobre 2020. Nous allons procéder maintenant à la réalisation des prévisions concernant l’évolution du taux d’occupation des hôtels à LA sur un horizon de 36 mois en utilisant ce modèle.
+
+```{r}
+library(forecast)
+forecast_result<-forecast(serie, h=36)
+summary(forecast_result)
+
+autoplot(forecast_result)
+```
+Comme nous pouvons l’observer en regardant le graphique ci-dessus, en absence de la pandémie, selon les prévisions la demande adressée à l’industrie hôtelière à LA suivrait ses cycles traditionnels, avec des périodes ou le taux d’occupation approcherait 95%, correspondant à la forte demande touristique dans les mois de juin et juillet et des fluctuations cycliques entre 75% et 90% les autres mois, en fonction de la saisonnalité. Il est également à noter que les prévisions semblent indiquer une hausse graduelle de ces valeurs d’un cycle à un autre sur un horizon de 36 mois.
+
+En comparant cette situation avec les scénarios intégrant la présence de la pandémie, il devient donc évident que le changement de régime, qui se traduit par le passage à la période pandémique a généré une perturbation notable du cycle touristique enregistré auparavant et de celui prévu en absence de cette dernière. Si sous l’hypothèse que la crise sanitaire n’avait jamais émergé le taux d’occupation prévu pour juillet 2021 aurait été aux alentours de 92%, en présence de celle-ci les prévisions s’avèrent très pessimistes, comme nous avons pu le voir avec les trois scénarios. En effet, selon que le prolongement anticipé de la pandémie après octobre 2020 soit de 3, 6 ou 12 mois, le taux prévu varierait entre 12 et 36% et il ne toucherait pas les niveaux prépandémiques même vers la fin du 2022.
+
+Toutefois, il convient de mentionner que notre modélisation comporte certaines caractéristiques qui nécessitent une approche prudente dans l’interprétation des résultats. Les limites y liées seront présentées dans la section V.2 de la Conclusion.
+
+
+
+
+##V.CONCLUSION
+###V.1 Synthèse, implications et recommandations
+
+Au terme de notre étude, plusieurs aspects essentiels sont à souligner. En effet, nous pouvons constater que faire des prévisions du taux d’occupation des hôtels sur un horizon de deux ans en présence de la pandémie renvoie à une analyse complexe.  Dans un premier temps, nous avons estimé un modèle SARIMA (0,1,2)(1, 0, 0)[12] en nous appuyant sur l’analyse de l’ACF et de la PACF et à l’aide de la fonction auto.arima. Les tests de stationnarité de ADF, Phillips-Perron et KPSS nous ont permis de conclure à la non-stationnarité de la série non différenciée et à l’absence de racine unitaire après différenciation, raison pour laquelle nous avons retenu l’ordre d’intégration d=1.
+
+ Dans le but de tenir compte du changement de régime caractérisant les observations de la période janvier-octobre 2020, nous avons par la suite intégré la variable binaire Pandémie et nous avons procédé aux estimations d’un modèle SARIMAx. 
+La dernière étape de notre analyse a été consacrée à la réalisation des prévisions en suivant trois scénarios possibles portant sur le prolongement anticipé de la crise sanitaire. Cela nous a donné un aperçu plus précis de la façon dont la pandémie produirait une rupture dans la cyclicité touristique annuelle, ainsi que de l’intensité de cette rupture. Plus précisément, nos prévisions pour la période novembre 2020-octobre 2022 ont bien révélé qu’une persistance de la pandémie pour un an après octobre 2020 conduirait à une diminution drastique du taux d’occupation des hôtels avec une reprise très lente. Si nous comparons ces prévisions avec la situation réellement enregistrée durant la pandémie selon les statistiques officielles, nos prévisions comportent quand même un caractère plus pessimiste.
+
+Si nous nous plaçons dans une perspective de recommandations à faire pour amortir l’effet de la crise sanitaire sur le tourisme à LA, en supposant que nos prévisions seraient intervenues en pleine pandémie, en octobre 2020, il serait essentiel que les établissements touristiques adaptent leur offre en procédant à une diversification des marchés (voyages d’affaires essentiels), ainsi qu’à une amélioration de l’expérience client par l’adaptation aux nouvelles normes de santé et sécurité.
+
+
+
+Au terme de notre étude, plusieurs aspects essentiels sont à souligner. En effet, nous pouvons constater que faire des prévisions du taux d’occupation des hôtels sur un horizon de deux ans en présence de la pandémie renvoie à une analyse complexe.  Dans un premier temps, nous avons estimé un modèle SARIMA (0,1,2)(1, 0, 0)[12] en nous appuyant sur l’analyse de l’ACF et de la PACF et à l’aide de la fonction auto.arima. Les tests de stationnarité de ADF, Phillips-Perron et KPSS nous ont permis de conclure à la non-stationnarité de la série non différenciée et à l’absence de racine unitaire après différenciation, raison pour laquelle nous avons retenu l’ordre d’intégration d=1.
+ Dans le but de tenir compte du changement de régime caractérisant les observations de la période janvier-octobre 2020, nous avons par la suite intégré la variable binaire Pandémie et nous avons procédé aux estimations d’un modèle SARIMAx. 
+La dernière étape de notre analyse a été consacrée à la réalisation des prévisions en suivant trois scénarios possibles portant sur le prolongement anticipé de la crise sanitaire. Cela nous a donné un aperçu plus précis de la façon dont la pandémie produirait une rupture dans la cyclicité touristique annuelle, ainsi que de l’intensité de cette rupture. Plus précisément, nos prévisions pour la période novembre 2020-octobre 2022 ont bien révélé qu’une persistance de la pandémie pour un an après octobre 2020 conduirait à une diminution drastique du taux d’occupation des hôtels avec une reprise très lente. Si nous comparons ces prévisions avec la situation réellement enregistrée durant la pandémie selon les statistiques officielles, nos prévisions comportent quand même un caractère plus pessimiste.
+
+Si nous nous plaçons dans une perspective de recommandations à faire pour amortir l’effet de la crise sanitaire sur le tourisme à LA, en supposant que nos prévisions seraient intervenues en pleine pandémie, en octobre 2020, il serait essentiel que les établissements touristiques adaptent leur offre en procédant à une diversification des marchés (voyages d’affaires essentiels), ainsi qu’à une amélioration de l’expérience client par l’adaptation aux nouvelles normes de santé et sécurité.
+
+###V.2 Limites et extensions
+
+Bien que l’utilisation d’une variable binaire indiquant la présence de la pandémie dans notre modèle SARIMA a l’avantage de pouvoir capturer le changement de régime, ce qui est essentiel pour expliquer la perturbation de la cyclicité enregistrée en absence de la pandémie, il est essentiel de mentionner que ce modèle ne prend pas en compte la dynamique d’ajustement vers le long terme. Comme vu précédemment, cela nous a permis de réaliser des prévisions sur un horizon de court terme à partir de différents scénarios portant sur la durée anticipée de la pandémie. Autrement dit, l’emploi de la variable binaire nous a permis uniquement d’identifier la perturbation de la saisonnalité induite par la pandémie à chaque instant de prévision, sans pour autant capturer un potentiel échelonnage de l’effet de la pandémie sur le tourisme. Etant donné que l’objectif de notre étude s’articule autour de la prévision du taux mensuel d’occupation des hôtels à LA en prenant en compte à la fois la saisonnalité et la manière dont la présence de la pandémie perturbe le cycle touristique à court terme, le modèle ARIMAx saisonnier employé répond de manière satisfaisante à cet objectif.
+
+Néanmoins, dans l’optique de tenir compte de l’effet graduel de la pandémie sur le tourisme, le passage de notre modèle ARIMAx saisonnier à un modèle à retards échelonnés incluant comme variable explicative le nombre hebdomadaire de décès causés par le Covid-19 pourrait être envisagé. Dans ce cas, l’accent serait mis plutôt sur l’effet total d’une variation de cette variable, et non plus sur la façon dont un changement de régime (présence vs absence de la pandémie) perturbe le processus autorégressif saisonnier, comme vu dans notre modélisation. Cela pourrait faire l’objet d’une étude ultérieure.
+
+##REFERENCES BIBLIOGRAPHIQUES
+
+1. Nalini Chintalapudi, Gopi Battineni and Francesco Amenta, "Covid-19 disease outbreak forecasting of registered and recovered cases after sixty day lockdown in italy: A data driven model approach", Journal of Microbiology Immunology and Infection, 2020. 
+2. Duccio Fanelli and Francesco Piazza, "Analysis and forecast of covid-19 spreading in China, Italy and France", Chaos Solitons & Fractals, vol. 134, pp. 109761, 2020
+3. Marinko Škare and Domingo Riberio Soriano and Małgorzata Porada-Rochoń "Impact of COVID-19 on the travel and tourism industry", Technological Forecasting and Social Change , 2021. 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
